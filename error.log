@@ -10,3 +10,6 @@
 2026-06-13 20:36:30 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 429 - {'status': 429, 'title': 'Too Many Requests'}
 2026-06-13 20:38:01 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 429 - {'status': 429, 'title': 'Too Many Requests'}
 2026-06-13 20:41:15 [ERROR] nvidia_client: NVIDIA API call failed: Model returned empty content (None) — may be a refusal or transient error
+2026-06-13 20:47:50 [ERROR] nvidia_client: NVIDIA API call failed: Model returned empty content (None) — may be a refusal or transient error
+2026-06-13 20:49:01 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 429 - {'status': 429, 'title': 'Too Many Requests'}
+2026-06-13 20:51:09 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 429 - {'status': 429, 'title': 'Too Many Requests'}
