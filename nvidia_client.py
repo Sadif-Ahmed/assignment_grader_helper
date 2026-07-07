@@ -4,7 +4,7 @@ import json
 import logging
 import time
 import threading
-from typing import Any
+from typing import Any, Callable
 
 import fitz  # PyMuPDF
 import httpx
@@ -91,7 +91,7 @@ def _enforce_rate_limit(rpm: int = 40):
 
 
 @retry(
-    wait=wait_exponential(multiplier=2, min=60, max=120),
+    wait=wait_exponential(multiplier=2, min=5, max=90),
     stop=stop_after_attempt(3),
     reraise=True,
 )
@@ -103,7 +103,8 @@ def _do_nvidia_call(
     image_b64: str | None = None,
     schema: dict[str, Any] | None = None,
     temperature: float = 0.1,
-    max_tokens: int = 16384,
+    max_tokens: int = 32768,
+    validate: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """
     Inner function: Call NVIDIA NIM endpoint with exponential backoff.
@@ -158,11 +159,18 @@ def _do_nvidia_call(
 
     try:
         response = client.chat.completions.create(**kwargs)
-        content = response.choices[0].message.content
+        choice = response.choices[0]
+        content = choice.message.content
 
         if content is None:
             raise ValueError("Model returned empty content (None) — may be a refusal or transient error")
-        
+
+        if choice.finish_reason == "length":
+            raise ValueError(
+                f"Response truncated at max_tokens={max_tokens} (finish_reason=length) — "
+                "output was cut off mid-generation, would silently corrupt structured data"
+            )
+
         # If the model returned JSON wrapped in markdown blocks, strip it before parsing.
         if schema:
             clean_content = content.strip()
@@ -170,7 +178,10 @@ def _do_nvidia_call(
                 clean_content = clean_content[7:]
             if clean_content.endswith("```"):
                 clean_content = clean_content[:-3]
-            return json.loads(clean_content)
+            result = json.loads(clean_content)
+            if validate:
+                validate(result)  # raises on incomplete/invalid output -> retried like any other failure
+            return result
         else:
             return {"content": content}
             
@@ -187,11 +198,17 @@ def call_nvidia_structured(
     image_b64: str | None = None,
     schema: dict[str, Any] | None = None,
     temperature: float = 0.1,
-    max_tokens: int = 16384,
+    max_tokens: int = 32768,
+    validate: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """
     Call NVIDIA NIM, with support for model fallbacks.
     Accepts at most ONE base64 image per call.
+
+    If `validate` is given, it's called on the parsed JSON result (schema
+    calls only) and should raise if the result is incomplete/invalid — that
+    triggers the same per-model retry (tenacity) and pool fallback (below)
+    as a hard API failure would.
     """
     models_to_try = [model] if isinstance(model, str) else model
 
@@ -208,6 +225,7 @@ def call_nvidia_structured(
                 schema=schema,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                validate=validate,
             )
         except Exception as e:
             logger.warning(f"Model {m} failed after all retries: {e}")

@@ -1,15 +1,36 @@
-2026-06-13 19:59:48 [ERROR] nvidia_client: NVIDIA API call failed: Model returned empty content (None) — may be a refusal or transient error
-2026-06-13 20:01:08 [ERROR] nvidia_client: NVIDIA API call failed: Model returned empty content (None) — may be a refusal or transient error
-2026-06-13 20:03:23 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 429 - {'status': 429, 'title': 'Too Many Requests'}
-2026-06-13 20:05:13 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 429 - {'status': 429, 'title': 'Too Many Requests'}
-2026-06-13 20:11:28 [ERROR] nvidia_client: NVIDIA API call failed: Model returned empty content (None) — may be a refusal or transient error
-2026-06-13 20:13:58 [ERROR] nvidia_client: NVIDIA API call failed: Model returned empty content (None) — may be a refusal or transient error
-2026-06-13 20:16:34 [ERROR] nvidia_client: NVIDIA API call failed: Model returned empty content (None) — may be a refusal or transient error
-2026-06-13 20:20:53 [ERROR] nvidia_client: NVIDIA API call failed: Model returned empty content (None) — may be a refusal or transient error
-2026-06-13 20:29:12 [ERROR] nvidia_client: NVIDIA API call failed: Model returned empty content (None) — may be a refusal or transient error
-2026-06-13 20:36:30 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 429 - {'status': 429, 'title': 'Too Many Requests'}
-2026-06-13 20:38:01 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 429 - {'status': 429, 'title': 'Too Many Requests'}
-2026-06-13 20:41:15 [ERROR] nvidia_client: NVIDIA API call failed: Model returned empty content (None) — may be a refusal or transient error
-2026-06-13 20:47:50 [ERROR] nvidia_client: NVIDIA API call failed: Model returned empty content (None) — may be a refusal or transient error
-2026-06-13 20:49:01 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 429 - {'status': 429, 'title': 'Too Many Requests'}
-2026-06-13 20:51:09 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 429 - {'status': 429, 'title': 'Too Many Requests'}
+2026-07-07 21:15:29 [ERROR] nvidia_client: NVIDIA API call failed: Model returned empty content (None) — may be a refusal or transient error
+2026-07-07 21:15:48 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 500 - {'error': {'message': 'invalid type: unit variant, expected newtype variant at line 1 column 40', 'type': 'Internal Server Error', 'code': 500}}
+2026-07-07 21:17:56 [ERROR] nvidia_client: NVIDIA API call failed: Model returned empty content (None) — may be a refusal or transient error
+2026-07-07 21:18:22 [ERROR] nvidia_client: NVIDIA API call failed: Model returned empty content (None) — may be a refusal or transient error
+2026-07-07 21:20:52 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 500 - {'error': {'message': 'invalid type: unit variant, expected newtype variant at line 1 column 40', 'type': 'Internal Server Error', 'code': 500}}
+2026-07-07 21:22:00 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 500 - {'error': {'message': 'invalid type: unit variant, expected newtype variant at line 1 column 40', 'type': 'Internal Server Error', 'code': 500}}
+2026-07-07 21:22:37 [ERROR] nvidia_client: NVIDIA API call failed: Model returned empty content (None) — may be a refusal or transient error
+2026-07-07 21:23:18 [ERROR] nvidia_client: NVIDIA API call failed: Model returned empty content (None) — may be a refusal or transient error
+2026-07-07 21:29:36 [ERROR] nvidia_client: NVIDIA API call failed: Incomplete restructuring output: declared total_questions=7 but only 1 question(s) present
+2026-07-07 21:30:21 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 504
+2026-07-07 21:30:32 [ERROR] nvidia_client: NVIDIA API call failed: Incomplete restructuring output: declared total_questions=7 but only 1 question(s) present
+2026-07-07 21:31:29 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 500 - {'error': {'message': 'invalid type: unit variant, expected newtype variant at line 1 column 40', 'type': 'Internal Server Error', 'code': 500}}
+2026-07-07 21:31:29 [WARNING] nvidia_client: Model qwen/qwen3.5-397b-a17b failed after all retries: Error code: 500 - {'error': {'message': 'invalid type: unit variant, expected newtype variant at line 1 column 40', 'type': 'Internal Server Error', 'code': 500}}
+2026-07-07 21:32:08 [ERROR] nvidia_client: NVIDIA API call failed: Model returned empty content (None) — may be a refusal or transient error
+2026-07-07 21:32:08 [ERROR] nvidia_client: NVIDIA API call failed: Incomplete restructuring output: declared total_questions=7 but only 2 question(s) present
+2026-07-07 21:33:03 [ERROR] nvidia_client: NVIDIA API call failed: Model returned empty content (None) — may be a refusal or transient error
+2026-07-07 21:33:25 [ERROR] nvidia_client: NVIDIA API call failed: Incomplete restructuring output: declared total_questions=7 but only 2 question(s) present
+2026-07-07 21:34:38 [ERROR] nvidia_client: NVIDIA API call failed: Incomplete restructuring output: declared total_questions=7 but only 2 question(s) present
+2026-07-07 21:34:38 [WARNING] nvidia_client: Model qwen/qwen3.5-397b-a17b failed after all retries: Incomplete restructuring output: declared total_questions=7 but only 2 question(s) present
+2026-07-07 21:35:58 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 504
+2026-07-07 21:39:01 [ERROR] nvidia_client: NVIDIA API call failed: Model returned empty content (None) — may be a refusal or transient error
+2026-07-07 21:39:39 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 500 - {'error': {'message': 'invalid type: unit variant, expected newtype variant at line 1 column 40', 'type': 'Internal Server Error', 'code': 500}}
+2026-07-07 21:40:52 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 500 - {'error': {'message': 'invalid type: unit variant, expected newtype variant at line 1 column 40', 'type': 'Internal Server Error', 'code': 500}}
+2026-07-07 21:42:18 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 500 - {'error': {'message': 'invalid type: unit variant, expected newtype variant at line 1 column 40', 'type': 'Internal Server Error', 'code': 500}}
+2026-07-07 21:44:52 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 500 - {'error': {'message': 'invalid type: unit variant, expected newtype variant at line 1 column 40', 'type': 'Internal Server Error', 'code': 500}}
+2026-07-07 21:46:46 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 500 - {'error': {'message': 'invalid type: unit variant, expected newtype variant at line 1 column 40', 'type': 'Internal Server Error', 'code': 500}}
+2026-07-07 21:51:28 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 504
+2026-07-07 21:52:23 [ERROR] nvidia_client: NVIDIA API call failed: Error code: 500 - {'error': {'message': 'invalid type: unit variant, expected newtype variant at line 1 column 40', 'type': 'Internal Server Error', 'code': 500}}
+2026-07-07 21:52:53 [ERROR] nvidia_client: NVIDIA API call failed: Invalid control character at: line 1 column 1337 (char 1336)
+2026-07-07 21:54:50 [ERROR] nvidia_client: NVIDIA API call failed: Incomplete restructuring output: declared total_questions=7 but only 3 question(s) present
+2026-07-07 21:56:40 [ERROR] nvidia_client: NVIDIA API call failed: Incomplete restructuring output: declared total_questions=7 but only 3 question(s) present
+2026-07-07 21:59:29 [ERROR] nvidia_client: NVIDIA API call failed: Incomplete restructuring output: declared total_questions=7 but only 3 question(s) present
+2026-07-07 21:59:29 [WARNING] nvidia_client: Model qwen/qwen3.5-397b-a17b failed after all retries: Incomplete restructuring output: declared total_questions=7 but only 3 question(s) present
+2026-07-07 22:10:05 [ERROR] nvidia_client: NVIDIA API call failed: Model returned empty content (None) — may be a refusal or transient error
+2026-07-07 22:18:46 [ERROR] nvidia_client: NVIDIA API call failed: Response truncated at max_tokens=32768 (finish_reason=length) — output was cut off mid-generation, would silently corrupt structured data
+2026-07-07 22:21:29 [ERROR] nvidia_client: NVIDIA API call failed: Response truncated at max_tokens=32768 (finish_reason=length) — output was cut off mid-generation, would silently corrupt structured data

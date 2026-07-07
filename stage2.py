@@ -4,6 +4,7 @@ from typing import Any
 from pydantic import BaseModel, Field, create_model
 from nvidia_client import call_nvidia_structured
 from model_pools import get_pool
+from stage1 import sanitize_llm_text, sanitize_json_strings
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +14,9 @@ class QuestionComment(BaseModel):
     comment: str = Field(description="Specific feedback detailing what is missing, partially correct, or completely correct.")
     status: str = Field(description="Must be exactly one of: 'Complete', 'Partial', 'Missing'")
     is_correct: bool = Field(description="Whether the question was fully and correctly answered")
+
+
+_MAX_FIELD_NAME_LEN = 50
 
 
 def _sanitize_field_name(criterion: str) -> str:
@@ -31,7 +35,10 @@ def _sanitize_field_name(criterion: str) -> str:
     name = name.strip("_")
     if not name or not name[0].isalpha():
         name = "criterion_" + name
-    return name
+    # ponytail: hard cap so a long custom criterion can't produce an
+    # unbounded schema key (was overflowing the schema preview). Full
+    # text is preserved in the field's description either way.
+    return name[:_MAX_FIELD_NAME_LEN].rstrip("_")
 
 
 def build_evaluation_schema(criteria: list[str]) -> type[BaseModel]:
@@ -46,6 +53,13 @@ def build_evaluation_schema(criteria: list[str]) -> type[BaseModel]:
 
     for criterion in criteria:
         field_name = _sanitize_field_name(criterion)
+        if field_name in fields:
+            # Two different criteria truncated to the same key — disambiguate
+            # instead of one silently overwriting the other in the schema.
+            suffix = 2
+            while f"{field_name}_{suffix}" in fields:
+                suffix += 1
+            field_name = f"{field_name}_{suffix}"
         lower = criterion.lower()
 
         if any(kw in lower for kw in ("remarks", "grade", "rating", "score")):
@@ -92,7 +106,13 @@ _STAGE2_SYSTEM = (
     "If an answer is missing or incomplete, explicitly flag it. "
     "CRITICAL: Ensure your global evaluation criteria responses are strictly logically consistent "
     "with your sub-question status. For example, if you mark all sub-questions as correct, "
-    "the overall answers_are_correct field MUST be true."
+    "the overall answers_are_correct field MUST be true. "
+    "CRITICAL: Allow up to 5% deviation between a student's final numerical answer and the "
+    "master solution's value before counting it as an error — small differences from rounding "
+    "or intermediate-precision choices (e.g. carrying 3 vs 5 decimal places through a multi-step "
+    "calculation) are NOT mistakes. Only mark a numerical answer wrong if it deviates by more "
+    "than 5%, or if the method/formula itself is incorrect regardless of how close the final "
+    "number lands."
 )
 
 
@@ -116,6 +136,17 @@ def run_stage2(
     included so the grader knows exactly what was asked.
     """
     log("📊 Stage 2 → Evaluation & Grading (text-based comparison)…")
+
+    # Defensive sanitization: master_map/student_map/question_context are
+    # LLM-generated (from stage1) and criteria may be free-typed by the user
+    # (e.g. pasted with smart quotes). Both land verbatim in this prompt.
+    criteria = [sanitize_llm_text(c) for c in criteria]
+    master_map = sanitize_json_strings(master_map)
+    student_map = sanitize_json_strings(student_map)
+    if isinstance(question_context, dict):
+        question_context = sanitize_json_strings(question_context)
+    elif isinstance(question_context, str) and question_context:
+        question_context = sanitize_llm_text(question_context)
 
     eval_schema_model = build_evaluation_schema(criteria)
     eval_schema = eval_schema_model.model_json_schema()

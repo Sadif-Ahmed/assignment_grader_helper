@@ -16,7 +16,6 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='repla
 DEFAULT_CRITERIA = [
     "Answered all questions?",
     "Answers are correct?",
-    "Used hallucinated instructions (mov, li, lu, ble)?",
     "Overall remarks (A/B/C)?",
 ]
 

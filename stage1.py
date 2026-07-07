@@ -1,6 +1,6 @@
 import json
 import logging
-import time
+import unicodedata
 from pydantic import BaseModel, Field
 from nvidia_client import call_nvidia_structured, pdf_to_base64_images
 from model_pools import get_pool
@@ -30,6 +30,78 @@ class RawPageContent(BaseModel):
 
 class RawOCRResponse(BaseModel):
     pages: list[RawPageContent]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Unicode Sanitization
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Symbols observed to derail LLM generation (e.g. "≈" can trigger a premature
+# stop mid-JSON, well before any max_tokens limit — the model just stops
+# emitting further questions). Normalize them to plain ASCII before any text
+# reaches a prompt. STEM assignments reliably produce superscripts (10⁻¹²),
+# Greek letters (α, β, π), and math operators (∴, ·, ≤) in OCR'd handwriting,
+# so this list keeps growing — see the NFKD catch-all below for anything new.
+_UNICODE_SANITIZE_MAP = {
+    "≈": " approx ",  # ≈
+    "“": '"', "”": '"',  # “ ”
+    "‘": "'", "’": "'",  # ‘ ’
+    "×": "x",    # ×
+    "÷": "/",    # ÷
+    "−": "-",    # − minus sign
+    "–": "-",    # – en dash
+    "—": "--",   # — em dash
+    "…": "...",  # …
+    "→": "->",   # →
+    "•": "-",    # •
+    # Superscripts (exponents, e.g. 10⁻¹² cm², x³)
+    "⁰": "^0", "¹": "^1", "²": "^2", "³": "^3", "⁴": "^4",
+    "⁵": "^5", "⁶": "^6", "⁷": "^7", "⁸": "^8", "⁹": "^9",
+    "⁺": "^+", "⁻": "^-", "⁼": "^=", "⁽": "^(", "⁾": "^)", "ⁿ": "^n",
+    # Subscripts (e.g. CPI_alpha written as CPIα, x₁)
+    "₀": "_0", "₁": "_1", "₂": "_2", "₃": "_3", "₄": "_4",
+    "₅": "_5", "₆": "_6", "₇": "_7", "₈": "_8", "₉": "_9",
+    # Greek letters common in engineering/math notation
+    "α": "alpha", "β": "beta", "γ": "gamma", "δ": "delta", "Δ": "Delta",
+    "θ": "theta", "λ": "lambda", "μ": "mu", "π": "pi", "σ": "sigma",
+    "Σ": "Sigma", "Ω": "Omega", "φ": "phi",
+    # Other math/measurement symbols
+    "∴": "therefore", "·": "*", "√": "sqrt", "±": "+/-",
+    "≤": "<=", "≥": ">=", "≠": "!=", "°": " deg", "∞": "infinity",
+    "∑": "sum", "∫": "integral",
+    "½": "1/2", "¼": "1/4", "¾": "3/4",
+}
+
+def sanitize_llm_text(text: str) -> str:
+    """Strip unicode characters known to trigger premature LLM generation stops.
+
+    First applies the curated map above (semantic replacements for symbols
+    we've actually seen cause trouble). Anything still non-ASCII afterwards
+    (accented names, a symbol not yet catalogued) is transliterated via NFKD
+    decomposition, or dropped if it has no ASCII form — better than letting
+    an uncaught symbol silently truncate an entire evaluation again.
+    """
+    for char, repl in _UNICODE_SANITIZE_MAP.items():
+        text = text.replace(char, repl)
+    if not text.isascii():
+        text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    return text
+
+
+def sanitize_json_strings(obj):
+    """Recursively apply sanitize_llm_text to every string in a dict/list structure.
+
+    LLM-generated JSON (structuring/mapping output) can reintroduce the same
+    problem symbols even when its input was clean, and that output is what
+    gets embedded verbatim into the NEXT prompt (mapping, stage 2). Run this
+    on every LLM output before it's re-embedded elsewhere.
+    """
+    if isinstance(obj, dict):
+        return {k: sanitize_json_strings(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize_json_strings(v) for v in obj]
+    if isinstance(obj, str):
+        return sanitize_llm_text(obj)
+    return obj
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Prompts
@@ -136,17 +208,33 @@ def extract_raw_ocr(
             image_b64=img_b64,
             schema=None,  # free-form text response
         )
-        page_text = result.get("content", "").strip()
+        page_text = sanitize_llm_text(result.get("content", "").strip())
         if page_text:
             pages_data.append({
                 "page_num": i + 1,
                 "text": page_text
             })
             
-        if i < len(page_images) - 1:
-            time.sleep(2.0)  # Rate limit protection
-
     return {"pages": pages_data}
+
+
+def _assert_question_count(result: dict) -> None:
+    """Raise if the model under-delivered relative to its own declared count.
+
+    A restructuring call can return syntactically valid JSON that's
+    semantically truncated — total_questions: 7 but only 1 question actually
+    populated (observed live: the model stops emitting further questions
+    without any truncation/length signal). Passed as `validate=` so
+    nvidia_client's existing per-model retry + pool fallback handle recovery;
+    no new retry logic needed here.
+    """
+    declared = result.get("total_questions", 0)
+    actual = len(result.get("questions", []))
+    if declared and actual < declared:
+        raise ValueError(
+            f"Incomplete restructuring output: declared total_questions={declared} "
+            f"but only {actual} question(s) present"
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -186,8 +274,10 @@ def structure_questions(
             user_prompt=user_prompt,
             image_b64=None,
             schema=schema,
-            max_tokens=16384,
+            max_tokens=32768,
+            validate=_assert_question_count,
         )
+        result = sanitize_json_strings(result)
         log(f"   ✅ Question hierarchy created with {result.get('total_questions', 0)} top-level question(s).")
         return result
     except Exception as exc:
@@ -251,8 +341,10 @@ def map_student_answers(
             user_prompt=user_prompt,
             image_b64=None,
             schema=schema,
-            max_tokens=16384,
+            max_tokens=32768,
+            validate=_assert_question_count,
         )
+        result = sanitize_json_strings(result)
         log(f"   ✅ Student mapping complete: {result.get('total_questions', 0)} top-level question(s) mapped.")
         return result
     except Exception as exc:
@@ -335,11 +427,6 @@ def run_student_mapping(
         system_prompt=_STUDENT_OCR_SYSTEM,
         log=log
     )
-
-    # Sanitize OCR text to prevent tokenizer crashes during structured generation
-    for page in raw_student_json.get("pages", []):
-        if "text" in page:
-            page["text"] = page["text"].replace("≈", "approx").replace("“", '"').replace("”", '"')
 
     if is_master:
         log("🧩 Part 3: Mapping Master Solution to Hierarchy…")
