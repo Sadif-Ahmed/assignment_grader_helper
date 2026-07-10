@@ -44,11 +44,11 @@ def demo() -> None:
         ids = [r["Student ID"] for r in rows]
         assert ids == ["23101132", "23201333"], f"expected one collapsed row per student, got {ids}"
         assert "duplicate" not in rows[0]["Student ID"], rows[0]
-        assert rows[0]["Overall Quality"] == "A", (
-            f"expected the higher-scoring duplicate's remarks to win, got {rows[0]['Overall Quality']}"
-        )
         # The winning duplicate's own fields must come along, not the loser's.
-        assert rows[0]["Overall Remarks (A/B/C)"] == "A", rows[0]
+        assert rows[0]["Overall Remarks (A/B/C)"] == "A", (
+            f"expected the higher-scoring duplicate's remarks to win, got {rows[0]['Overall Remarks (A/B/C)']}"
+        )
+        assert rows[0]["Total Sub-Questions"] == "7", rows[0]
         assert rows[0]["Answered All Questions"] == "True", rows[0]
         assert rows[0]["Answers Correct"] == "False", rows[0]  # 6/7, not all correct
         assert "comment 0" in rows[0]["Full Comment"], rows[0]
@@ -58,5 +58,30 @@ def demo() -> None:
         shutil.rmtree(reports_dir)
 
 
+def demo_breadth_beats_score() -> None:
+    """A malformed response that only covers questions 0-3 of 7 (but scores
+    100% on those few) must lose to a complete 7/7 response that scores
+    lower — coverage breadth outranks raw correctness score. Pins the real
+    bug hit on student 23201214: a truncated-but-'perfect' duplicate was
+    winning over the complete, honestly-graded submission."""
+    reports_dir = tempfile.mkdtemp()
+    try:
+        _write_eval(reports_dir, "99999999", correct=3, total=4)              # malformed: stops at Q3, but 3/4 correct = 0.75
+        _write_eval(reports_dir, "99999999[duplicate]", correct=4, total=7)   # complete: 4/7 correct = 0.571
+
+        out_path = export_summary_csv(reports_dir)
+        with open(out_path, encoding="utf-8-sig") as fh:
+            rows = {r["Student ID"]: r for r in csv.DictReader(fh)}
+
+        assert rows["99999999"]["Total Sub-Questions"] == "7", (
+            f"expected the complete (breadth=7) submission to win over the higher-scoring but "
+            f"truncated one, got {rows['99999999']}"
+        )
+        print("OK: coverage breadth outranks raw correctness score when picking between duplicates.")
+    finally:
+        shutil.rmtree(reports_dir)
+
+
 if __name__ == "__main__":
     demo()
+    demo_breadth_beats_score()

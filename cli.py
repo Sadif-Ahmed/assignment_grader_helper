@@ -322,11 +322,83 @@ def _fmt_eta(seconds: float) -> str:
     return f"{h}h{m:02d}m" if h else f"{m}m{s:02d}s"
 
 
+# ── Interactive wizard (step-by-step prompts instead of flags) ──
+
+def _prompt(msg: str, default: str = "") -> str:
+    suffix = f" [{default}]" if default else ""
+    val = input(f"{msg}{suffix}: ").strip()
+    return val or default
+
+
+def _prompt_path(msg: str) -> str:
+    while True:
+        val = _prompt(msg)
+        if val and os.path.isfile(val):
+            return val
+        print(f"  (!) file not found: {val!r} — try again.")
+
+
+def _prompt_dir(msg: str) -> str:
+    while True:
+        val = _prompt(msg)
+        if val and os.path.isdir(val):
+            return val
+        print(f"  (!) directory not found: {val!r} — try again.")
+
+
+def _prompt_yes_no(msg: str, default: bool = True) -> bool:
+    val = input(f"{msg} [{'Y/n' if default else 'y/N'}]: ").strip().lower()
+    return default if not val else val.startswith("y")
+
+
+def _prompt_criteria() -> list[str]:
+    print("  Default criteria:")
+    for c in DEFAULT_CRITERIA:
+        print(f"    - {c}")
+    criteria = list(DEFAULT_CRITERIA) if _prompt_yes_no("Use these?", default=True) else []
+    print("  Add custom criteria one at a time, blank line to stop.")
+    while True:
+        c = input(f"    Custom criterion #{len(criteria) + 1} (blank to finish): ").strip()
+        if not c:
+            break
+        criteria.append(c)
+    return criteria
+
+
+def _run_wizard() -> argparse.Namespace:
+    print("=== Assignment Grader — Step-by-Step Setup ===")
+    question_pdf = _prompt_path("Question PDF path")
+    master_pdf = _prompt_path("Master solution PDF path")
+    target_dir = _prompt_dir("Student submissions folder")
+    api_key = _prompt("NVIDIA API key (blank = use api_key.txt)") or None
+    model_id = _prompt("Model override (blank = default per-task pools)") or None
+    criteria = _prompt_criteria()
+    workers = int(_prompt("Concurrent workers", str(BATCH_MAX_WORKERS)))
+    limit_raw = _prompt("Limit to first N pending submissions (blank = whole batch)")
+    limit = int(limit_raw) if limit_raw else None
+
+    print("\n--- Ready ---")
+    print(f"  Question PDF : {question_pdf}")
+    print(f"  Master PDF   : {master_pdf}")
+    print(f"  Target dir   : {target_dir}")
+    print(f"  Criteria     : {criteria}")
+    print(f"  Workers      : {workers}")
+    print(f"  Limit        : {limit or 'none (full batch)'}")
+    if not _prompt_yes_no("Proceed?", default=True):
+        sys.exit("Aborted.")
+
+    return argparse.Namespace(
+        question_pdf=question_pdf, master_pdf=master_pdf, target_dir=target_dir,
+        api_key=api_key, model_id=model_id, criteria=criteria or None,
+        workers=workers, limit=limit,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Batch-grade student PDFs against a master solution.")
-    parser.add_argument("--question-pdf", required=True, help="Assignment question paper PDF")
-    parser.add_argument("--master-pdf", required=True, help="Master solution / answer key PDF")
-    parser.add_argument("--target-dir", required=True, help="Folder containing student submission PDFs")
+    parser.add_argument("--question-pdf", default=None, help="Assignment question paper PDF")
+    parser.add_argument("--master-pdf", default=None, help="Master solution / answer key PDF")
+    parser.add_argument("--target-dir", default=None, help="Folder containing student submission PDFs")
     parser.add_argument("--api-key", default=None, help="Overrides api_key.txt")
     parser.add_argument("--model-id", default=None, help="Single model override; default = per-task NVIDIA model pools")
     parser.add_argument(
@@ -335,7 +407,19 @@ def main() -> None:
     )
     parser.add_argument("--workers", type=int, default=BATCH_MAX_WORKERS, help="Concurrent submissions in flight")
     parser.add_argument("--limit", type=int, default=None, help="Only process the first N pending submissions (testing)")
+    parser.add_argument(
+        "--interactive", "-i", action="store_true",
+        help="Step-by-step prompts instead of flags (also triggered automatically with no arguments)",
+    )
     args = parser.parse_args()
+
+    if args.interactive or len(sys.argv) == 1:
+        args = _run_wizard()
+    elif not (args.question_pdf and args.master_pdf and args.target_dir):
+        parser.error(
+            "--question-pdf, --master-pdf and --target-dir are required "
+            "(or run with no arguments, or --interactive, for step-by-step setup)"
+        )
 
     api_key = _load_api_key(args.api_key)
     criteria = args.criteria or DEFAULT_CRITERIA

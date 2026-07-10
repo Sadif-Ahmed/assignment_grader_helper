@@ -182,6 +182,20 @@ _STUDENT_MAPPING_SYSTEM = (
 # Part 1: Raw OCR Extraction
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _assert_nonempty_ocr(result: dict) -> None:
+    """Raise if a page's OCR came back blank.
+
+    Previously a blank/garbage OCR response for a page was silently dropped
+    (the page just never made it into pages_data, no error, no retry) —
+    restructuring then received fewer pages than the PDF actually has with
+    no signal anything was lost. A real handwritten-submission page essentially
+    never legitimately OCRs to nothing, so empty content is treated as a
+    failed extraction and retried like any other failure.
+    """
+    if not (result.get("content") or "").strip():
+        raise ValueError("OCR returned empty/blank content for this page")
+
+
 def extract_raw_ocr(
     api_key: str,
     model_id: str | list[str],
@@ -207,14 +221,14 @@ def extract_raw_ocr(
             user_prompt=f"Extract all text from page {i + 1} of this document.",
             image_b64=img_b64,
             schema=None,  # free-form text response
+            validate=_assert_nonempty_ocr,
         )
         page_text = sanitize_llm_text(result.get("content", "").strip())
-        if page_text:
-            pages_data.append({
-                "page_num": i + 1,
-                "text": page_text
-            })
-            
+        pages_data.append({
+            "page_num": i + 1,
+            "text": page_text
+        })
+
     return {"pages": pages_data}
 
 
@@ -348,17 +362,15 @@ def map_student_answers(
         log(f"   ✅ Student mapping complete: {result.get('total_questions', 0)} top-level question(s) mapped.")
         return result
     except Exception as exc:
+        # Do NOT fall back to a single unstructured blob here — that used to
+        # look like a successful MAPPED result to the caller, so a student
+        # whose real mapping exhausted all retries would silently get an
+        # unparseable "All (Fallback)" blob fed into Stage 2 instead of being
+        # retried. Propagate so the caller marks the student FAILED and
+        # retries the real mapping next run.
         logger.error(f"Failed to map student answers: {exc}")
         log(f"   ⚠️ Failed to map student answers: {exc}")
-        # Fallback
-        return {
-            "total_questions": 1,
-            "questions": [{
-                "question_id": "All (Fallback)",
-                "raw_content": student_text,
-                "sub_questions": []
-            }]
-        }
+        raise
 
 
 # ─────────────────────────────────────────────────────────────────────────────

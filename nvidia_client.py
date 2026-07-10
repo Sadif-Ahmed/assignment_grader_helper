@@ -179,11 +179,12 @@ def _do_nvidia_call(
             if clean_content.endswith("```"):
                 clean_content = clean_content[:-3]
             result = json.loads(clean_content)
-            if validate:
-                validate(result)  # raises on incomplete/invalid output -> retried like any other failure
-            return result
         else:
-            return {"content": content}
+            result = {"content": content}
+
+        if validate:
+            validate(result)  # raises on incomplete/invalid output -> retried like any other failure
+        return result
             
     except Exception as e:
         logger.error(f"NVIDIA API call failed: {e}")

@@ -1,5 +1,7 @@
+import functools
 import json
 import logging
+import re
 from typing import Any
 from pydantic import BaseModel, Field, create_model
 from nvidia_client import call_nvidia_structured
@@ -94,6 +96,30 @@ def build_criteria_prompt(criteria: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _assert_full_coverage(result: dict, expected_total: int) -> None:
+    """Raise if question_wise_comments doesn't cover every top-level question.
+
+    Observed live: the grader sometimes emits both a parent-level entry
+    ('1') and sub-part entries ('1a', '1b', ...) for the same question, then
+    stops partway through (e.g. covers only questions 1-4 of 7) with no
+    truncation/length signal — schema-valid but semantically incomplete.
+    Passed as `validate=` so nvidia_client's existing retry handles recovery.
+    """
+    if not expected_total:
+        return
+    covered = set()
+    for c in result.get("question_wise_comments", []):
+        m = re.match(r"(\d+)", str(c.get("question_id", "")))
+        if m:
+            covered.add(int(m.group(1)))
+    missing = sorted(set(range(1, expected_total + 1)) - covered)
+    if missing:
+        raise ValueError(
+            f"Incomplete evaluation: missing top-level question(s) {missing} "
+            f"of {expected_total} in question_wise_comments"
+        )
+
+
 _STAGE2_SYSTEM = (
     "Act as a strict and granular grader. Compare the student's extracted answers against "
     "the master solution. Apply the provided evaluation criteria strictly to "
@@ -136,6 +162,8 @@ def run_stage2(
     included so the grader knows exactly what was asked.
     """
     log("📊 Stage 2 → Evaluation & Grading (text-based comparison)…")
+
+    expected_total = question_context.get("total_questions", 0) if isinstance(question_context, dict) else 0
 
     # Defensive sanitization: master_map/student_map/question_context are
     # LLM-generated (from stage1) and criteria may be free-typed by the user
@@ -188,6 +216,7 @@ def run_stage2(
             user_prompt=user_prompt,
             image_b64=None,  # No images — fully text-based
             schema=eval_schema,
+            validate=functools.partial(_assert_full_coverage, expected_total=expected_total),
         )
         return result
     except Exception as exc:

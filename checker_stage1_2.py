@@ -37,10 +37,10 @@ def main():
     if args.model_id:
         print(f"Using single model override: {args.model_id}")
     else:
-        print("Using per-task LLM pools:")
-        for task, pool in MODEL_POOLS.items():
+        print("Using per-task models:")
+        for task, model in MODEL_POOLS.items():
             if task in ("student_parsing", "evaluation", "question_extraction", "restructuring"):
-                print(f"  {task}: {pool[0]} → {pool[1]} → {pool[2]}")
+                print(f"  {task}: {model}")
 
     def log(msg):
         print(msg)
