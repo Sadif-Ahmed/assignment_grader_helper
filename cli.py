@@ -4,8 +4,9 @@ Command-line batch runner for the assignment grading pipeline.
 
 Batch-grades student PDFs against a master solution: tracker.json
 checkpointing (PENDING/MAPPED/EVALUATED/FAILED, resumable), filename
-sanitization/dedup, per-task NVIDIA model pools, ThreadPoolExecutor
-concurrency, and a summary CSV — all self-contained here (no UI framework).
+sanitization/dedup, a single pinned NVIDIA model per task (overridable via
+--model-id), ThreadPoolExecutor concurrency, and a summary CSV — all
+self-contained here (no UI framework).
 
 Usage:
     python cli.py --question-pdf Q.pdf --master-pdf S.pdf --target-dir submissions/
@@ -16,6 +17,7 @@ API key is read from api_key.txt next to this script by default; --api-key overr
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -204,7 +206,12 @@ def discover_student_pdfs(
     """
     results: list[tuple[str, str]] = []
     seen_counts: dict[str, int] = {}
-    for fname in os.listdir(target_dir):
+    # Sorted, not raw os.listdir() order: which file is "primary" vs
+    # "[duplicate]" for a double-uploaded student depends on iteration
+    # order, and os.listdir() order isn't guaranteed stable across runs —
+    # a shift would desync tracker.json (and its cached _map.json) from
+    # which physical file a given ID actually refers to.
+    for fname in sorted(os.listdir(target_dir)):
         if not fname.lower().endswith(".pdf"):
             continue
         if master_filename and fname == master_filename:
@@ -236,6 +243,38 @@ def discover_student_pdfs(
 
         results.append((student_id, os.path.join(target_dir, fname)))
     return sorted(results, key=lambda x: x[0])
+
+
+def find_duplicate_uploads(student_pdfs: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Return (id_a, id_b) for every pair of student IDs whose PDF files are
+    byte-identical.
+
+    Filename-based student IDs (see discover_student_pdfs) trust the
+    filename to say who a submission belongs to — they have no way to catch
+    the case where the same file was accidentally uploaded twice under two
+    different students' names (observed live: "24141084_RONY_MIAH.pdf" and
+    "24141084_Saiful_Rony.pdf" were an exact byte-for-byte copy of a third
+    student's submission — note these two even shared the SAME filename ID,
+    just different apparent names, which is exactly the case this must not
+    miss). A byte-identical match is real students' handwritten answers
+    essentially never hashing the same by coincidence, so any match — same
+    nominal ID or not — is worth surfacing rather than silently trusted:
+    flag both sides and let a human/grader confirm identity, rather than
+    assume a same-ID match is always a harmless self-resubmission.
+    """
+    hashes: dict[str, list[str]] = {}
+    for student_id, path in student_pdfs:
+        with open(path, "rb") as fh:
+            digest = hashlib.md5(fh.read()).hexdigest()
+        hashes.setdefault(digest, []).append(student_id)
+
+    pairs: list[tuple[str, str]] = []
+    for ids in hashes.values():
+        if len(ids) > 1:
+            for i in range(len(ids)):
+                for j in range(i + 1, len(ids)):
+                    pairs.append((ids[i], ids[j]))
+    return pairs
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -371,7 +410,7 @@ def _run_wizard() -> argparse.Namespace:
     master_pdf = _prompt_path("Master solution PDF path")
     target_dir = _prompt_dir("Student submissions folder")
     api_key = _prompt("NVIDIA API key (blank = use api_key.txt)") or None
-    model_id = _prompt("Model override (blank = default per-task pools)") or None
+    model_id = _prompt("Model override (blank = default qwen/qwen3.5-397b-a17b)") or None
     criteria = _prompt_criteria()
     workers = int(_prompt("Concurrent workers", str(BATCH_MAX_WORKERS)))
     limit_raw = _prompt("Limit to first N pending submissions (blank = whole batch)")
@@ -400,7 +439,7 @@ def main() -> None:
     parser.add_argument("--master-pdf", default=None, help="Master solution / answer key PDF")
     parser.add_argument("--target-dir", default=None, help="Folder containing student submission PDFs")
     parser.add_argument("--api-key", default=None, help="Overrides api_key.txt")
-    parser.add_argument("--model-id", default=None, help="Single model override; default = per-task NVIDIA model pools")
+    parser.add_argument("--model-id", default=None, help="Single model override; default = qwen/qwen3.5-397b-a17b for every task")
     parser.add_argument(
         "--criteria", action="append", default=None,
         help="Evaluation criterion; repeatable. Default = the 3 standard criteria.",
@@ -453,6 +492,34 @@ def main() -> None:
     for sid, fpath in student_pdfs:
         upsert_submission(db_path, sid, fpath)
 
+    print("Checking for duplicate-upload cross-contamination…", flush=True)
+    content_dupes = find_duplicate_uploads(student_pdfs)
+    duplicate_content_ids: set[str] = set()
+    for id_a, id_b in content_dupes:
+        duplicate_content_ids.add(id_a)
+        duplicate_content_ids.add(id_b)
+    # DUPLICATE_CONTENT, not MISMATCH: a byte-identical match is real but
+    # ambiguous on its own — it could be cross-student contamination (two
+    # slots ended up with a third student's file) or a harmless same-student
+    # double-upload (same person submitted their own PDF twice). A hash
+    # match can't tell those apart (they look structurally identical —
+    # same-ID and cross-ID collisions both just mean "two files, same
+    # bytes"), so this only marks it for identity verification rather than
+    # asserting either outcome. Something with an actual view of the PDF
+    # content (a human, or the grade-assignments skill's subagents) decides
+    # whether to promote it to MISMATCH or clear it back to PENDING.
+    for sid in sorted(duplicate_content_ids):
+        update_status(db_path, sid, "DUPLICATE_CONTENT")
+    if content_dupes:
+        for id_a, id_b in content_dupes:
+            print(
+                f"  (!) {id_a} and {id_b} are byte-identical PDFs. Both marked "
+                f"DUPLICATE_CONTENT (excluded from grading) pending identity "
+                f"verification — could be cross-student contamination or a "
+                f"harmless same-student re-upload.",
+                flush=True,
+            )
+
     def log(msg: str) -> None:
         print(f"  {msg}", flush=True)
 
@@ -464,7 +531,10 @@ def main() -> None:
             question_blueprint = json.load(fh)
     else:
         print("Building question blueprint…", flush=True)
-        question_blueprint = build_question_blueprint(api_key, args.question_pdf, log, args.model_id)
+        try:
+            question_blueprint = build_question_blueprint(api_key, args.question_pdf, log, args.model_id)
+        except Exception as exc:
+            sys.exit(f"Failed to build question blueprint after retries: {exc}\nRerun the same command to try again.")
         with open(question_map_path, "w", encoding="utf-8") as fh:
             json.dump(question_blueprint, fh, indent=2, ensure_ascii=False)
 
@@ -476,9 +546,12 @@ def main() -> None:
             master_result = json.load(fh)
     else:
         print("Extracting master solution answers…", flush=True)
-        master_result = run_student_mapping(
-            api_key, args.master_pdf, question_blueprint, log, args.model_id, is_master=True
-        )
+        try:
+            master_result = run_student_mapping(
+                api_key, args.master_pdf, question_blueprint, log, args.model_id, is_master=True
+            )
+        except Exception as exc:
+            sys.exit(f"Failed to map master solution after retries: {exc}\nRerun the same command to try again.")
         with open(master_map_path, "w", encoding="utf-8") as fh:
             json.dump(master_result, fh, indent=2, ensure_ascii=False)
     master_answers = master_result.get("structured_student_solution", master_result)

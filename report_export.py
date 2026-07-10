@@ -72,6 +72,127 @@ def _coverage_breadth(data: dict) -> int:
     return len(covered)
 
 
+def _expected_coverage(breadths: list[int]) -> int:
+    """The most common coverage breadth across this batch's winning submissions.
+
+    Self-calibrates to whatever the real top-level question count is for
+    this assignment (7, 12, whatever) purely from the data at hand, no need
+    to thread the question blueprint through report_export. Assumes most
+    students' grading succeeded cleanly — true as long as malformed results
+    are the minority, which is the case this flag exists to catch."""
+    if not breadths:
+        return 0
+    return Counter(breadths).most_common(1)[0][0]
+
+
+def _review_flag(data: dict, expected_total: int) -> str:
+    """Return a manual-review reason, or '' if the submission looks structurally sound.
+
+    Catches the two shapes of malformed Stage 2 output seen in practice:
+    a response that stops partway through (fewer top-level questions
+    covered than the rest of the batch), and one with duplicate parent +
+    sub-part entries for the same question (more raw entries than distinct
+    questions covered) — either can still look fine at a glance (schema-valid,
+    plausible correctness score) so this has to check structure, not content.
+    """
+    comments = data.get("question_wise_comments", [])
+    raw_count = len(comments)
+    covered = set()
+    for c in comments:
+        m = re.match(r"(\d+)", str(c.get("question_id", "")))
+        if m:
+            covered.add(int(m.group(1)))
+    breadth = len(covered)
+
+    reasons = []
+    if expected_total and breadth < expected_total:
+        missing = sorted(set(range(1, expected_total + 1)) - covered)
+        reasons.append(f"incomplete: missing question(s) {', '.join(map(str, missing))}")
+    if raw_count > breadth:
+        reasons.append(f"duplicate entries: {raw_count} entries for only {breadth} question(s)")
+    return "; ".join(reasons)
+
+
+_MISMATCH_STATUS = "MISMATCH"
+_DUPLICATE_CONTENT_STATUS = "DUPLICATE_CONTENT"
+# Tracker statuses whose row must always reflect the tracker, never a stale
+# evaluation file left over from before the status was set.
+_OVERRIDE_STATUSES = {_MISMATCH_STATUS, _DUPLICATE_CONTENT_STATUS}
+
+
+def _never_graded_ids(reports_dir: str, graded_base_ids: set[str]) -> list[tuple[str, str]]:
+    """Cross-check tracker.json for students with zero successful evaluation.
+
+    A student whose every attempt failed (bad OCR, model derailment, etc.)
+    has no '<id>_evaluation.json' file at all, so the file-scan loop above
+    never sees them — they'd be silently absent from the summary rather
+    than flagged. Returns [(base_id, last_status), ...] for anyone tracked
+    but not present in graded_base_ids. Best-effort: if tracker.json is
+    missing (e.g. in tests that don't set one up), returns nothing.
+    """
+    tracker_path = os.path.join(reports_dir, "tracker.json")
+    if not os.path.isfile(tracker_path):
+        return []
+    with open(tracker_path, "r", encoding="utf-8") as fh:
+        tracker = json.load(fh)
+
+    missing: dict[str, str] = {}
+    for student_id, info in tracker.items():
+        base_id = _base_student_id(student_id)
+        if base_id in graded_base_ids:
+            continue
+        missing[base_id] = info.get("status", "UNKNOWN")
+    return sorted(missing.items())
+
+
+def _override_status_base_ids(reports_dir: str) -> dict[str, str]:
+    """base_id -> status for every tracker entry whose status is in
+    _OVERRIDE_STATUSES — read directly, independent of whether an
+    '<id>_evaluation.json' happens to exist. A stale evaluation file can be
+    sitting on disk from before the status was set (it was generated while
+    the wrong PDF was still believed to belong to this student, or before a
+    duplicate-content collision was noticed); these statuses must override
+    that stale grade in the summary, not silently lose to it just because a
+    file already exists.
+    """
+    tracker_path = os.path.join(reports_dir, "tracker.json")
+    if not os.path.isfile(tracker_path):
+        return {}
+    with open(tracker_path, "r", encoding="utf-8") as fh:
+        tracker = json.load(fh)
+    result: dict[str, str] = {}
+    for student_id, info in tracker.items():
+        status = info.get("status")
+        if status in _OVERRIDE_STATUSES:
+            result[_base_student_id(student_id)] = status
+    return result
+
+
+def _never_graded_reason(status: str) -> str:
+    """Human-readable Review Flag text for a tracker status with no evaluation file.
+
+    MISMATCH is set (by hand, or by a grader that checks submission identity)
+    when the name/ID written inside the PDF doesn't match the filename it was
+    uploaded under — e.g. two students' submission slots both ended up
+    containing a copy of a third student's PDF. That's a source-data problem,
+    not a grading failure, so it gets its own distinct, actionable label
+    instead of the generic "never successfully graded" wording.
+
+    DUPLICATE_CONTENT is the weaker, purely mechanical signal that precedes
+    it: two submissions are byte-identical (see cli.find_duplicate_uploads),
+    which could mean cross-student contamination (-> MISMATCH once someone
+    confirms it) OR a harmless same-student double-upload (-> back to
+    PENDING once confirmed) — a hash match alone can't tell those apart
+    (same-ID and cross-ID collisions look structurally identical), so it
+    waits for identity verification instead of asserting either outcome.
+    """
+    if status == _MISMATCH_STATUS:
+        return "Submitted Other's Assignment"
+    if status == _DUPLICATE_CONTENT_STATUS:
+        return "duplicate content detected (byte-identical to another submission) — pending identity verification"
+    return f"never successfully graded (tracker status: {status})"
+
+
 def export_summary_csv(reports_dir: str, output_path: str | None = None) -> str:
     """Scan *reports_dir* for '<id>_evaluation.json' files and write a summary CSV.
 
@@ -79,13 +200,20 @@ def export_summary_csv(reports_dir: str, output_path: str | None = None) -> str:
     e.g. an accidental double-upload) are collapsed to one row using the
     most complete submission (by top-level question coverage, then by
     correctness score) — otherwise the same student shows up twice.
+
+    Every row is checked for structurally malformed grading output (see
+    `_review_flag`) and flagged for manual review rather than silently
+    reported as-is; students with no successful evaluation at all are added
+    as their own flagged rows via `_never_graded_ids` instead of vanishing
+    from the summary.
     """
     if output_path is None:
         report_dir = os.path.join(reports_dir, "report")
         os.makedirs(report_dir, exist_ok=True)
         output_path = os.path.join(report_dir, "summary.csv")
 
-    best: dict[str, tuple] = {}  # base_id -> (rank, comment, complete, missing, partial, correct, incorrect, answered_all, answers_correct, remarks)
+    best: dict[str, tuple] = {}       # base_id -> (rank, comment, complete, missing, partial, correct, incorrect, answered_all, answers_correct, remarks)
+    best_data: dict[str, dict] = {}   # base_id -> winning raw evaluation JSON, for the review-flag pass below
     for fname in os.listdir(reports_dir):
         if not fname.endswith("_evaluation.json"):
             continue
@@ -111,11 +239,20 @@ def export_summary_csv(reports_dir: str, output_path: str | None = None) -> str:
                 data.get("answers_are_correct", ""),
                 data.get("overall_remarks_a_b_c", ""),
             )
+            best_data[base_id] = data
+
+    expected_total = _expected_coverage([_coverage_breadth(d) for d in best_data.values()])
+    override_ids = _override_status_base_ids(reports_dir)
 
     rows = [
-        (base_id, *rest[1:])
+        (base_id, *rest[1:], _review_flag(best_data[base_id], expected_total))
         for base_id, rest in best.items()
+        if base_id not in override_ids
     ]
+    for base_id, status in _never_graded_ids(reports_dir, set(best.keys()) | set(override_ids.keys())):
+        rows.append((base_id, "", 0, 0, 0, 0, 0, 0, "", "", "", _never_graded_reason(status)))
+    for base_id, status in override_ids.items():
+        rows.append((base_id, "", 0, 0, 0, 0, 0, 0, "", "", "", _never_graded_reason(status)))
     rows.sort(key=lambda row: _sort_key(row[0]))
 
     # utf-8-sig so Excel auto-detects encoding instead of mangling special chars.
@@ -124,7 +261,7 @@ def export_summary_csv(reports_dir: str, output_path: str | None = None) -> str:
         writer.writerow([
             "Student ID", "Full Comment", "Total Sub-Questions", "Complete", "Missing", "Partial",
             "Correct", "Incorrect", "Answered All Questions", "Answers Correct",
-            "Overall Remarks (A/B/C)",
+            "Overall Remarks (A/B/C)", "Review Flag",
         ])
         writer.writerows(rows)
 

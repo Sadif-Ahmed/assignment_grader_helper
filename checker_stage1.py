@@ -8,9 +8,6 @@ from model_pools import MODEL_POOLS
 
 logging.basicConfig(level=logging.INFO)
 
-# Fix Windows console encoding for emoji output
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-
 def main():
     parser = argparse.ArgumentParser(description="Run only Stage 1 of the checker pipeline.")
     parser.add_argument("--api-key", required=True, help="NVIDIA API Key")
@@ -79,4 +76,7 @@ def main():
         print(f"Error occurred: {e}")
 
 if __name__ == "__main__":
+    # Fix Windows console encoding for emoji output — only when run as a
+    # script, so importing this module doesn't hijack the caller's stdout.
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     main()

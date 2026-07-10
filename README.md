@@ -1,6 +1,6 @@
 # 📝 Automated Assignment Grader
 
-A local Python command-line tool that batch-grades handwritten student PDF submissions against a master solution using a **two-stage multimodal LLM pipeline**. Powered by **NVIDIA NIM** (OpenAI-compatible endpoints), allowing you to use high-performance vision models like `meta/llama-3.2-90b-vision-instruct`.
+A local Python command-line tool that batch-grades handwritten student PDF submissions against a master solution using a **two-stage multimodal LLM pipeline**. Powered by **NVIDIA NIM** (OpenAI-compatible endpoints), defaulting to `qwen/qwen3.5-397b-a17b` for every task (overridable with `--model-id`).
 
 ---
 
@@ -36,9 +36,9 @@ A local Python command-line tool that batch-grades handwritten student PDF submi
 
 **Workflow Efficiency:** To optimize API usage, the pipeline extracts the structure from the **Question PDF** once, and maps the **Master Solution** to that structure once. Then, for each student submission, it maps their answers to the pre-computed question blueprint and passes it to Stage 2 for grading. Submissions run concurrently (a thread pool, bounded by the API's rate limit), not one at a time.
 
-**Stage 1 – Structural Mapping:** Extracts and transcribes all handwritten content from a student PDF without evaluating correctness, slotting answers directly into the question blueprint. A completeness check catches silently truncated output (a model returning fewer questions than it declared) and automatically retries/falls back to another model.
+**Stage 1 – Structural Mapping:** Extracts and transcribes all handwritten content from a student PDF without evaluating correctness, slotting answers directly into the question blueprint. Two completeness checks guard this stage: OCR extraction rejects blank/failed page transcriptions, and the mapping step rejects silently truncated output (a model returning fewer questions than it declared) — both retry automatically instead of passing bad data downstream.
 
-**Stage 2 – Evaluation & Grading:** Compares the student's mapped answers against the master solution blueprint using your chosen criteria, producing a structured JSON report.
+**Stage 2 – Evaluation & Grading:** Compares the student's mapped answers against the master solution blueprint using your chosen criteria, producing a structured JSON report. A completeness check rejects grading output that doesn't cover every top-level question (a model that stops partway through), retrying automatically.
 
 ---
 
@@ -119,7 +119,7 @@ submissions/
 
 - Each PDF filename becomes the **student ID** — the tool extracts the longest run of digits in the filename (e.g., `1042.pdf`, `1042 - Jane Doe.pdf`, and `CSE340_1042_A1.pdf` all become student `1042`).
 - Filenames with spaces are automatically renamed (spaces → underscores) the first time you run a batch against a folder.
-- Two files that resolve to the same student ID (an accidental double-upload) are both graded, but the summary CSV keeps only the higher-scoring one.
+- Two files that resolve to the same student ID (an accidental double-upload) are both graded, but the summary CSV keeps only the more complete one (see [Batch Summary CSV](#batch-summary-csv) below) — which file is treated as "primary" vs `[duplicate]` is decided by sorted filename order, so it's stable across reruns.
 - Have your **question PDF** and **master solution PDF** ready as separate files (paths are passed on the command line, they don't need to live inside the submissions folder).
 
 ---
@@ -136,7 +136,7 @@ python cli.py --question-pdf Q.pdf --master-pdf S.pdf --target-dir submissions/
 | `--master-pdf` | yes | Master solution / answer key PDF |
 | `--target-dir` | yes | Folder containing student submission PDFs |
 | `--api-key` | no | Overrides `api_key.txt` |
-| `--model-id` | no | Single model override; default is the per-task NVIDIA model pools with automatic fallback |
+| `--model-id` | no | Single model override; default is `qwen/qwen3.5-397b-a17b` for every task |
 | `--criteria` | no | Evaluation criterion text; repeatable. Default is the 3 standard criteria below |
 | `--workers` | no | Concurrent submissions in flight (default 6) |
 | `--limit` | no | Only process the first N pending submissions — handy for a quick test batch before running the whole class |
@@ -164,6 +164,8 @@ The default criteria (used when `--criteria` isn't passed) are:
 
 Interrupt anytime with Ctrl+C — already-graded submissions stay recorded in `tracker.json`; rerunning the same command resumes where it left off.
 
+**Step 3 is all-or-nothing on purpose.** The question and master blueprints are shared across every student in the batch and cached to `_question_blueprint.json` / `_master_blueprint.json` — if building either one fails after retries, the whole run stops immediately with a clear error instead of continuing with an empty/garbage blueprint that would silently corrupt grading for every student. Just rerun the same command; nothing is cached until it succeeds.
+
 ### Review Results
 
 After processing, find results in:
@@ -179,20 +181,34 @@ submissions/
     ├── 1043_map.json
     ├── 1043_evaluation.json
     ├── ...
-    └── summary.csv                    # Batch summary — one row per student
+    └── report/
+        └── summary.csv                # Batch summary — one row per student
 ```
 
 ### Batch Summary CSV
 
-Alongside the per-student reports, the tool writes `reports/summary.csv` — one row per student, sorted by student ID, with three columns:
+Alongside the per-student reports, the tool writes `reports/report/summary.csv` — one row per student, sorted by student ID:
 
 | Column | Content |
 |---|---|
 | Student ID | Sorted numerically |
-| Summarised Comment | Flags per student: Partial/Missing sub-questions, "Lack of explanation" (keyword scan on feedback) |
-| Overall Quality | The grade/remarks criterion for that run, or a correct-count ratio if no such criterion is active |
+| Full Comment | Every question's full feedback text, verbatim |
+| Total Sub-Questions | Count of graded sub-questions for that student |
+| Complete / Missing / Partial | Sub-question status tally |
+| Correct / Incorrect | Sub-question correctness tally |
+| Answered All Questions | From the default criteria (or your `--criteria`) |
+| Answers Correct | From the default criteria (or your `--criteria`) |
+| Overall Remarks (A/B/C) | From the default criteria (or your `--criteria`) |
+| Review Flag | Blank if the row looks structurally sound; a reason string if it needs a human to check it |
 
-It's regenerated automatically at the end of every run. Duplicate submissions (two files that resolved to the same student ID) are collapsed to a single row using whichever attempt scored higher.
+It's regenerated automatically at the end of every run. Duplicate submissions (two files that resolved to the same student ID) are collapsed to a single row using whichever attempt covers more top-level questions — a truncated grading response can score deceptively high on the few questions it reached, so completeness is checked before correctness score is used as a tiebreaker.
+
+**Review Flag** — even with the retry guards in the pipeline, a model can occasionally exhaust every retry and still leave behind malformed data (e.g. it self-reports covering all questions but the structure shows otherwise) or fail every attempt outright. Rather than trust the row at face value, every student is checked against the batch's own data:
+- **Incomplete coverage**: the student's graded questions cover fewer top-level questions than most of the class did (the "normal" count is inferred from the batch itself, not hardcoded) — flagged with which question numbers are missing.
+- **Duplicate entries**: more raw feedback entries than distinct questions covered (a parent-question entry and its own sub-parts both present) — a sign the grading response was internally inconsistent.
+- **Never successfully graded**: every attempt for that student failed (per `tracker.json`) and there's no evaluation file at all — they'd otherwise be silently absent from the summary; instead they get their own flagged row.
+
+Flagged rows still need a human to look at the source PDF and either fix the underlying issue (bad OCR, a model having a bad day — see Troubleshooting) or grade manually; the flag exists so they can't slip through unnoticed.
 
 ---
 
@@ -214,12 +230,16 @@ The tool tracks each submission's status in `reports/tracker.json`:
 
 ---
 
-## Rate Limit Handling & Fallbacks
+## Rate Limit Handling & Retries
 
-- Detects rate limits/transient errors and retries with exponential backoff.
-- Each task (question extraction, student parsing, restructuring, evaluation) has a pool of 3 fallback models — if one exhausts its retries, the pipeline automatically moves to the next model in the pool without interrupting the batch.
-- A completeness check on Stage 1's structuring/mapping output catches a model that returns valid-but-truncated JSON (declares N questions but only delivers some of them) and retries it the same way as a hard API failure.
+- Detects rate limits/transient errors and retries with exponential backoff (up to 3 attempts per call).
+- Every task (question extraction, student parsing, restructuring, evaluation) is pinned to a single model (`qwen/qwen3.5-397b-a17b` by default, or `--model-id`) rather than falling back across models — a weaker fallback model silently producing worse structured output was worse than failing loudly and retrying the same model. Use `--model-id` to override on a rerun if a specific model is having a bad day.
+- Three completeness checks catch valid-but-wrong JSON that would otherwise silently corrupt downstream data, and retry it the same way as a hard API failure:
+  - OCR extraction rejects a page that comes back blank.
+  - Stage 1 structuring/mapping rejects output that declares N questions but only delivers some of them.
+  - Stage 2 evaluation rejects output that doesn't cover every top-level question.
 - Submissions process concurrently (`--workers`, default 6); the shared rate limiter is what actually caps throughput, not the worker count.
+- If a submission still fails after retries, it's marked `FAILED` in `tracker.json` and picked up again automatically on the next run of the same command — no data is corrupted by a failed attempt, since results are only written on success.
 
 ## Multimodal Limitations Bypassed
 
@@ -240,6 +260,10 @@ assignment_checker/
 ├── check_llm.py          # CLI utility to test NVIDIA connection
 ├── checker_stage1.py     # CLI utility: Stage 1 only, single submission
 ├── checker_stage1_2.py   # CLI utility: Stage 2 only, from pre-computed JSON
+├── test_stage1_validation.py  # Self-check: Stage 1 completeness/OCR guards
+├── test_stage2_validation.py  # Self-check: Stage 2 completeness guard
+├── test_report_export.py      # Self-check: duplicate-submission dedup logic
+├── test_sanitize.py           # Self-check: unicode sanitization
 ├── requirements.txt      # Python dependencies
 └── README.md             # This file
 ```
@@ -254,6 +278,8 @@ assignment_checker/
 | API key rejected | Verify your key starts with `nvapi-` and was obtained from [build.nvidia.com](https://build.nvidia.com) |
 | "No student PDF files found" | Check that `--target-dir` contains `.pdf` files |
 | 429 / "temporarily rate-limited upstream" | NIM models can occasionally get overloaded. Try a different model or wait a few minutes. |
+| A specific student keeps ending up `FAILED` / flagged in `Review Flag` after several reruns | Some submissions are just hard for the model — long, unusual formatting, or a symbol not yet in the sanitizer's map. Rerunning the same command retries it (each retry is independent, so it can succeed on a later attempt); if it consistently fails the same way, try `--model-id` with a different model for just that one PDF, or grade it manually. This isn't a sign of a broken pipeline — it's what the Review Flag column exists to catch instead of letting it slip through silently. |
+| Building the question/master blueprint fails and the whole run stops | Expected — see "Step 3 is all-or-nothing" above. Just rerun the same command. |
 
 ---
 

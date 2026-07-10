@@ -239,8 +239,8 @@ def _assert_question_count(result: dict) -> None:
     semantically truncated — total_questions: 7 but only 1 question actually
     populated (observed live: the model stops emitting further questions
     without any truncation/length signal). Passed as `validate=` so
-    nvidia_client's existing per-model retry + pool fallback handle recovery;
-    no new retry logic needed here.
+    nvidia_client's existing per-call retry (tenacity backoff) handles
+    recovery; no new retry logic needed here.
     """
     declared = result.get("total_questions", 0)
     actual = len(result.get("questions", []))
@@ -295,9 +295,15 @@ def structure_questions(
         log(f"   ✅ Question hierarchy created with {result.get('total_questions', 0)} top-level question(s).")
         return result
     except Exception as exc:
+        # Do NOT fall back to an empty structure here — this blueprint is
+        # shared across the WHOLE batch (cached to _question_blueprint.json /
+        # _master_blueprint.json), so silently returning {} would make every
+        # student's mapping hit map_student_answers' "no hierarchy" branch
+        # instead of failing loudly on just this one call. Propagate so the
+        # caller fails clearly and this gets retried on the next run.
         logger.error(f"Failed to structure questions: {exc}")
         log(f"   ⚠️ Failed to structure questions: {exc}")
-        return {"total_questions": 0, "questions": []}
+        raise
 
 
 # ─────────────────────────────────────────────────────────────────────────────

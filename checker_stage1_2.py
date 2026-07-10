@@ -10,9 +10,6 @@ from model_pools import MODEL_POOLS
 
 logging.basicConfig(level=logging.INFO)
 
-# Fix Windows console encoding for emoji output
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-
 DEFAULT_CRITERIA = [
     "Answered all questions?",
     "Answers are correct?",
@@ -108,7 +105,6 @@ def main():
             criteria=DEFAULT_CRITERIA,
             log=log,
             question_context=question_blueprint,
-            model_id_override=args.model_id,
         )
         
         with open(args.output, "w", encoding="utf-8") as f:
@@ -119,4 +115,7 @@ def main():
         print(f"Error occurred: {e}")
 
 if __name__ == "__main__":
+    # Fix Windows console encoding for emoji output — only when run as a
+    # script, so importing this module doesn't hijack the caller's stdout.
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     main()
