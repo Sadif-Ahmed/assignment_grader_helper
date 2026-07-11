@@ -247,6 +247,22 @@ NVIDIA NIM's open-weights vision endpoints (like `Llama-3.2-90B-Vision`) enforce
 
 ---
 
+## Alternative: Grading with Claude Code Instead of the NVIDIA Pipeline
+
+If you're running this inside [Claude Code](https://claude.com/product/claude-code) and don't have (or don't want to use) an NVIDIA API key, there's a second path: `.claude/skills/grade-assignments/SKILL.md`. It has Claude Code itself do the reading, mapping, and grading — no `cli.py`, no NVIDIA API call — while writing to the exact same `reports/tracker.json` / `_question_blueprint.json` / `_master_blueprint.json` / `<id>_evaluation.json` / `summary.csv` schema described above, via `report_export.py` unmodified. Either path produces output the other can read.
+
+**How it works:** one subagent per student PDF (Claude Code's vision-capable `Read` tool reads the PDF directly — no OCR/rendering step), run a handful in parallel, results written back to the same `reports/` folder. See the skill file for the full runbook, including duplicate-upload handling and identity-mismatch checks.
+
+**To use it:** in Claude Code, invoke `/grade-assignments` (or just ask it to grade a folder of submissions) and point it at your question PDF, master solution PDF, and submissions folder.
+
+**Still needed even on this path:**
+- Python 3.11+ and `pip install -r requirements.txt` — the skill imports helper functions (`discover_student_pdfs`, `find_duplicate_uploads`) from `cli.py`, which pulls in the full dependency list at import time regardless of which path grades the batch.
+- No `api_key.txt` needed — this path never calls the NVIDIA API.
+
+**Tradeoff vs. the NVIDIA pipeline:** cost and concurrency are bounded differently (usage on your Claude plan vs. NVIDIA NIM's rate limits/free tier), and large classes mean one subagent invocation per student — real time and cost at scale. Prefer `cli.py` if you have an NVIDIA key and are grading dozens+ of students regularly; prefer the Claude Code skill if you'd rather not manage a key, or want Claude doing the grading directly.
+
+---
+
 ## Project Structure
 
 ```
@@ -265,7 +281,11 @@ assignment_checker/
 ├── test_report_export.py      # Self-check: duplicate-submission dedup logic
 ├── test_sanitize.py           # Self-check: unicode sanitization
 ├── requirements.txt      # Python dependencies
-└── README.md             # This file
+├── README.md             # This file
+└── .claude/
+    └── skills/
+        └── grade-assignments/
+            └── SKILL.md   # Alternative grading path: Claude Code as the grader, no NVIDIA API
 ```
 
 ---

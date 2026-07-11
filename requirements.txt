@@ -1,3 +1,7 @@
+# Required for the NVIDIA-backed pipeline (cli.py/stage1.py/stage2.py/nvidia_client.py).
+# Also required for the Claude Code grading skill (.claude/skills/grade-assignments) —
+# it imports helper functions from cli.py, which pulls these in at module load time
+# even though that skill never calls the NVIDIA API itself.
 pydantic
 openai
 tenacity
